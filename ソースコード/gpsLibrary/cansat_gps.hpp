@@ -2,19 +2,22 @@
 #define __CANSAT_GPS_H__
 
 #include "Arduino.h"
+#include <stdio.h>
 #include <TinyGPS++.h>
 
 class Cansat_gps {
   public:
     Cansat_gps();
 
-    double lat(); // 緯度
-    double lng(); // 経度
+    static const uint32_t GPSBaud = 9600;
+
+    bool lat(char raw_gps, double* ret); // 緯度
+    bool lng(char raw_gps, double* ret); // 経度
+    bool gpsCsv(char raw_gps, char** ret);
 
   private:
-    static const uint32_t GPSBaud = 9600;
     TinyGPSPlus gps;
-    HardwareSerial ss(2);
+    bool dupFlg = false;
 };
 
 #endif // __CANSAT_GPS_H__

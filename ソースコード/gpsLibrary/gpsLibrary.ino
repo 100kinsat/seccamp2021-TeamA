@@ -1,23 +1,25 @@
 #include "cansat_gps.hpp"
 
 Cansat_gps cansat_gps = Cansat_gps();
+HardwareSerial ss(2);
 
 void setup() {
-
+  Serial.begin(115200);
+  ss.begin(9600);
+  
+  Serial.println("GPS start!");
 }
 
 void loop() {
-  Serial.begin(115200);
-  Serial.println("GPS start!");
 
-  double lat_value;
-  lat_value = cansat_gps.lat();
-  double lng_value;
-  lng_value = cansat_gps.lng();
+  char* temp;
 
-  Serial.println(lat_value,6);
-  Serial.print(",");
-  Serial.println(lng_value,6);
+  while(ss.available() > 0){
+    char c = ss.read();    // GPSセンサからの値を読み込み
+    if(cansat_gps.gpsCsv(c, &temp) == true){
+      Serial.println(temp);
+    }
+  }
   
   delay(1000);
 }
