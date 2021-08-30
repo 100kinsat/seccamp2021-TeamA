@@ -59,7 +59,7 @@ bool Cansat_gps::gpsCsv(char raw_gps, char** ret) {
         String b_str = String(b, 6);
         a_str.concat(",");
         a_str.concat(b_str);
-        a_str.concat("\n");
+        //a_str.concat("\n");
 
         //メモリ確保
         char* cstr = new char[a_str.length() + 1];
