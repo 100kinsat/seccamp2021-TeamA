@@ -188,3 +188,34 @@ void MySD::displaySpaceInfo(){
     Serial.printf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
     Serial.printf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
 }
+
+void MySD::appendLog(const char * message){
+    Serial.printf("Take a log: %s\n", message);
+
+    fs::FS &fs = SD;
+    File file = fs.open("/log.txt", FILE_APPEND);
+    if(!file){
+        Serial.println("Failed to open file for appending");
+        return;
+    }
+    
+    if(printWithTime(file, message)){
+        Serial.println("log appended");
+    } else {
+        Serial.println("Append failed");
+    }
+    file.close();
+}
+
+bool MySD::printWithTime(File file, const char * message){
+    if(!file.print(millis() / 1000)){
+        return false;
+    }
+    if(!file.print(":")){
+        return false;
+    }
+    if(!file.println(message)){
+        return false;
+    }
+    return true;
+}

@@ -20,7 +20,7 @@ void loop() {
   while(ss.available() > 0){
     char c = ss.read();    // GPSセンサからの値を読み込み
     if(cansat_gps.gpsCsv(c, &temp) == true){
-      mysd.appendFile(SD, "/log.txt", temp);
+      mysd.appendLog(temp);
       Serial.println(temp);
     }
   }
