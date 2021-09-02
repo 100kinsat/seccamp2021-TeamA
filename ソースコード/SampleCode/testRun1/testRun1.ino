@@ -58,16 +58,26 @@ void setup() {
   Wire.begin();
   Serial.begin(115200);
   gps_serial.begin(9600);
-  delay(4000);
+  delay(3000);
   mysd.createDir(SD, "/mag_log");
   mysd.writeFile(SD, LOG_FILE_NAME, "");
 
   Serial.println("start program");
 
+  Serial.println("set up MPU");
   if (!mpu.setup(0x68)) {
     while (true) {
       Serial.println("MPU connection failed. Please restart 100kinsat.");
     }
+  }
+  start_time = millis();
+  while(true) {
+    if (millis() - start_time > 5000) {
+      break;
+    }
+    if(mpu.update()) {
+      mpu.getYaw();
+    };
   }
 
   // set the calibration values.
@@ -116,7 +126,8 @@ void setup() {
 void loop() {
   switch(state) {
     case Start:
-      state = GetGPS;
+      Serial.println("Start moving");
+      state = CalcYawOffset;
       break;
     case CalcYawOffset:
       if (mpu.update()) {
@@ -140,6 +151,7 @@ void loop() {
       ledcWrite(CHANNEL_B, 0);
       state = GetGPS;
       break;
+
     case GetGPS:
       if (mpu.update()) {
         current_yaw = mpu.getYaw() + 180;
@@ -164,6 +176,7 @@ void loop() {
         }
       }
       break;
+
     case ChangeDirection:
       if (mpu.update()) {
         current_yaw = mpu.getYaw() + 180;
@@ -209,7 +222,7 @@ void loop() {
         digitalWrite(motorB[0], HIGH);
         digitalWrite(motorB[1], LOW);
         ledcWrite(CHANNEL_B, 80);
-        state = End;
+        state = GetGPS;
       }
       break;
     case End:
