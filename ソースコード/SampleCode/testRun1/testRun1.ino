@@ -29,6 +29,7 @@ const int LEDC_BASE_FREQ = 490;
 
 double current_yaw = 0;
 double yaw_offset = 0;
+double direction = 0;
 unsigned long start_time = 0;
 double current_lat = 0;
 double current_lng = 0;
@@ -57,9 +58,10 @@ void setup() {
   Wire.begin();
   Serial.begin(115200);
   gps_serial.begin(9600);
+  delay(4000);
   mysd.createDir(SD, "/mag_log");
   mysd.writeFile(SD, LOG_FILE_NAME, "");
-  delay(2000);
+
   Serial.println("start program");
 
   if (!mpu.setup(0x68)) {
@@ -114,7 +116,7 @@ void setup() {
 void loop() {
   switch(state) {
     case Start:
-      state = CalcYawOffset; // TODO: fix this
+      state = GetGPS;
       break;
     case CalcYawOffset:
       if (mpu.update()) {
@@ -136,7 +138,7 @@ void loop() {
       digitalWrite(motorB[0], LOW);
       digitalWrite(motorB[1], LOW);
       ledcWrite(CHANNEL_B, 0);
-      state = MoveTo;
+      state = GetGPS;
       break;
     case GetGPS:
       if (mpu.update()) {
@@ -145,57 +147,82 @@ void loop() {
       if (gps_serial.available() > 0) {
         char c = gps_serial.read();
         if(gps.getValues(c, &current_lng, &current_lat)) {
-          double direction, diff;
           azimuth.azimuth_to_goal(current_lng, current_lat, &direction);
-          diff = current_yaw - direction;
-          String msg = String("") + String(current_lat, 14) + "," + String(current_lng, 14) + "," + String(direction, 7) + "," + String(current_yaw, 7) + "," + String(diff, 7);
-
+          String msg = String("current position:,") + String(current_lat, 14) + "," + String(current_lng, 14);
           msg.toCharArray(log_buf, 300);
           Serial.println(msg);
-          // mysd.appendFile(SD, LOG_FILE_NAME, log_buf);
+          mysd.appendFile(SD, LOG_FILE_NAME, log_buf);
+          Serial.println(String("direction: ") + direction);
+
+          digitalWrite(motorA[0], LOW);
+          digitalWrite(motorA[1], HIGH);
+          ledcWrite(CHANNEL_A, 80);
+          digitalWrite(motorB[0], HIGH);
+          digitalWrite(motorB[1], LOW);
+          ledcWrite(CHANNEL_B, 0);
+          state = ChangeDirection;
         }
-        // char* tmp;
-        // if (gps.gpsCsv(c, &tmp)) {
-        //   Serial.println(tmp);
-        // }
       }
       break;
     case ChangeDirection:
       if (mpu.update()) {
         current_yaw = mpu.getYaw() + 180;
-        Serial.println(current_yaw);
-        if (current_yaw != 0 && current_yaw < 10) {
-          Serial.println("move to Ready stop");
-          state = ReadyStop;
+        double diff = current_yaw - direction;
+        if (diff > 180) {
+          diff = diff - 360;
+        } else if (diff < -180) {
+          diff = diff + 360;
         }
-      }
-      break;
-    case ReadyStop:
-      if (mpu.update()) {
-        current_yaw = mpu.getYaw() + 180;
-        Serial.println(current_yaw);
-        if (current_yaw > 300) {
-          // stop
+        Serial.println(String(current_yaw, 5) + "," + String(direction, 5) + "," + String(diff, 5));
+        if (abs(diff) < 3) {
+          Serial.println("Finish changing direction");
+          start_time = millis();
           digitalWrite(motorA[0], LOW);
-          digitalWrite(motorA[1], LOW);
-          ledcWrite(CHANNEL_A, 0);
-          digitalWrite(motorB[0], LOW);
+          digitalWrite(motorA[1], HIGH);
+          ledcWrite(CHANNEL_A, 180);
+          digitalWrite(motorB[0], HIGH);
+          digitalWrite(motorB[1], LOW);
+          ledcWrite(CHANNEL_B, 180);
+          state = MoveTo;
+        } else if (diff < 0) {
+          digitalWrite(motorA[0], LOW);
+          digitalWrite(motorA[1], HIGH);
+          ledcWrite(CHANNEL_A, 80);
+          digitalWrite(motorB[0], HIGH);
           digitalWrite(motorB[1], LOW);
           ledcWrite(CHANNEL_B, 0);
-          state = End;
+        } else {
+          digitalWrite(motorA[0], LOW);
+          digitalWrite(motorA[1], HIGH);
+          ledcWrite(CHANNEL_A, 0);
+          digitalWrite(motorB[0], HIGH);
+          digitalWrite(motorB[1], LOW);
+          ledcWrite(CHANNEL_B, 80);
         }
       }
       break;
     case MoveTo:
+      if (millis() - start_time > 10 * 1000) {
+        digitalWrite(motorA[0], LOW);
+        digitalWrite(motorA[1], HIGH);
+        ledcWrite(CHANNEL_A, 0);
+        digitalWrite(motorB[0], HIGH);
+        digitalWrite(motorB[1], LOW);
+        ledcWrite(CHANNEL_B, 80);
+        state = End;
+      }
+      break;
+    case End:
+      if (mpu.update()) {
+        current_yaw = mpu.getYaw() + 180;
+        Serial.println(current_yaw);
+      }
       digitalWrite(motorA[0], LOW);
       digitalWrite(motorA[1], LOW);
       ledcWrite(CHANNEL_A, 0);
-      digitalWrite(motorB[0], HIGH);
+      digitalWrite(motorB[0], LOW);
       digitalWrite(motorB[1], LOW);
-      ledcWrite(CHANNEL_B, 80);
-      state = ChangeDirection;
-      break;
-    case End:
+      ledcWrite(CHANNEL_B, 0);
       // do nothing
       break;
   }
