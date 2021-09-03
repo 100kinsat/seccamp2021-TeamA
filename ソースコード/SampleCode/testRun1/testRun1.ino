@@ -214,7 +214,7 @@ void loop() {
           double distance = -1;
           azimuth.distance_to_goal(current_lng, current_lat, &distance);
           if (0 <= distance && distance < 0.005) {
-            String msg = String("azimuth,distance,") + String(distance, 5);
+            String msg = String("azimuth,distance,") + String(distance, 5) + "\n";
             msg += String("transition,End\n");
             msg.toCharArray(log_buf, 300);
             Serial.println(msg);
@@ -245,6 +245,7 @@ void loop() {
         yaw_count++;
         if (yaw_count >= 20) {
           current_yaw = (yaw_sum / yaw_count) + 180.0;
+          double original_yaw = (yaw_sum / yaw_count) > 180 ? (yaw_sum / yaw_count) - 360 : (yaw_sum / yaw_count);
           if (current_yaw > 360) { current_yaw = current_yaw - 360; }
           if (current_yaw < 0) { current_yaw = current_yaw + 360; }
           double diff = current_yaw - direction;
@@ -260,7 +261,7 @@ void loop() {
             Serial.println("Finish changing direction");
             cd_state = CD_Start;
             start_time = millis();
-            moveMoter(220, 220);
+            moveMoter(245, 245);
             state = MoveTo;
             mysd.appendLog("transition,MoveTo");
           } else if (diff < 0) {
@@ -274,8 +275,8 @@ void loop() {
               moveMoter(0,80);
             }
           }
-          double original_yaw = (yaw_sum / yaw_count) > 180 ? (yaw_sum / yaw_count) - 360 : (yaw_sum / yaw_count);
-          String msg = String("sensor,mpu,") + original_yaw;
+
+          String msg = String("sensor,mpu,") + original_yaw + "," + current_yaw;
           msg.toCharArray(log_buf, 300);
           mysd.appendLog(log_buf);
         }
