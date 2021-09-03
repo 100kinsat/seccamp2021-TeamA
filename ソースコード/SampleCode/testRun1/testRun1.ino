@@ -214,6 +214,7 @@ void loop() {
           double distance = -1;
           azimuth.distance_to_goal(current_lng, current_lat, &distance);
           if (0 <= distance && distance < 0.005) {
+            moveMoter(0,0);
             String msg = String("azimuth,distance,") + String(distance, 5) + "\n";
             msg += String("transition,End\n");
             msg.toCharArray(log_buf, 300);
@@ -307,7 +308,6 @@ void loop() {
           mysd.appendLog(log_buf);
         }
       }
-      moveMoter(0, 0);
       break;
   }
 }
