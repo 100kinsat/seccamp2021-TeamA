@@ -21,8 +21,10 @@ class MySD {
     void deleteFile(fs::FS &fs, const char * path);
     void testFileIO(fs::FS &fs, const char * path);
     void displaySpaceInfo();
+    void appendLog(const char * message);
 
   private:
+    bool printWithTime(File file, const char * message);
 };
 
 #endif // __MYSD_H__

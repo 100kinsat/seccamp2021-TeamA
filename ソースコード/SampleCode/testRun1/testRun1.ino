@@ -5,6 +5,9 @@
 #include "yaw_offset.hpp"
 #include <stdlib.h>
 
+// 設定変数
+const bool USE_YAW_OFFSET = false; // 計算したyawのオフセット値を使うかどうか
+
 MPU9250 mpu;
 MySD mysd = MySD(); // SDカードへの書き込み処理を行う
 Cansat_gps gps = Cansat_gps(); // GPSの値を読み込む
@@ -18,8 +21,6 @@ HardwareSerial gps_serial(2); // GPSの通信
 double goal_lat = 43.018823502674586;
 double goal_lng = 141.4370544820975;
 
-const char* LOG_FILE_NAME = "/mag_log/2021-09-02-8.log";
-
 const int motorA[3] = {4, 13, 25};  // AIN1, AIN2, PWMA
 const int motorB[3] = {14, 27, 26}; // BIN1, BIN2, PWMB
 const int CHANNEL_A = 0;
@@ -29,6 +30,8 @@ const int LEDC_BASE_FREQ = 490;
 
 double current_yaw = 0;
 double yaw_offset = 0;
+double yaw_sum = 0;
+double yaw_count = 0;
 double direction = 0;
 unsigned long start_time = 0;
 double current_lat = 0;
@@ -43,24 +46,71 @@ enum State {
   GetGPS,
   ChangeDirection,
   MoveTo,
-  ReadyStop,
   End
 };
 State state = Start;
 
-// mpuのyawの値を100kinsatの前方向に対して北から右回りで0 ~ 360の値にする
-// double current_yaw() {
-//   double ret = mpu.getYaw();
-//   return ret + 180;
-// }
+enum ChangeDirectState {
+  CD_Start,
+  CD_Right,
+  CD_Left
+};
+ChangeDirectState cd_state = CD_Start;
+
+
+// モータを動作・停止させる
+void moveMoter(int left_moter, int right_moter) {
+  String msg = String("moter,");
+  if (left_moter == 0) {
+    digitalWrite(motorA[0], LOW);
+    digitalWrite(motorA[1], LOW);
+    ledcWrite(CHANNEL_A, 0);
+    msg += String("A,LOW,LOW,0,");
+  } else if (left_moter > 0) {
+    digitalWrite(motorA[0], LOW);
+    digitalWrite(motorA[1], HIGH);
+    ledcWrite(CHANNEL_A, left_moter);
+    msg += String("A,LOW,HIGH,") + String(left_moter);
+  } else {
+    digitalWrite(motorA[0], HIGH);
+    digitalWrite(motorA[1], LOW);
+    ledcWrite(CHANNEL_A, -1 * left_moter);
+    msg += String("A,HIGH,LOW,") + String(-1 * left_moter);
+  }
+  if (right_moter == 0) {
+    digitalWrite(motorB[0], LOW);
+    digitalWrite(motorB[1], LOW);
+    ledcWrite(CHANNEL_B, 0);
+    msg += String("B,LOW,LOW,0,");
+  } if (right_moter > 0) {
+    digitalWrite(motorB[0], HIGH);
+    digitalWrite(motorB[1], LOW);
+    ledcWrite(CHANNEL_B, right_moter);
+    msg += String("B,HIGH,LOW,") + String(right_moter);
+  } else {
+    digitalWrite(motorB[0], LOW);
+    digitalWrite(motorB[1], HIGH);
+    ledcWrite(CHANNEL_B, -1 * right_moter);
+    msg += String("B,LOW,HIGH,") + String(-1 * right_moter);
+  }
+  msg.toCharArray(log_buf, 300);
+  mysd.appendLog(log_buf);
+}
+
+void mpuAppendLog(float accX, float accY, float accZ, float gyroX, float gyroY, float gyroZ, float magX, float magY, float magZ, float yaw) {
+  unsigned char n = 4;
+  String msg = String("sensor,mpu,") + String(accX, n) + "," + String(accY, n) + "," + String(accZ, n) + ",";
+  msg += String(gyroX, n) + "," + String(gyroY, n) + "," + String(gyroZ, n) + ",";
+  msg += String(magX, n) + "," + String(magY, n) + "," + String(magZ, n) + "," + String(yaw, n);
+  msg.toCharArray(log_buf, 300);
+  mysd.appendLog(log_buf);
+}
 
 void setup() {
   Wire.begin();
   Serial.begin(115200);
   gps_serial.begin(9600);
-  delay(3000);
-  mysd.createDir(SD, "/mag_log");
-  mysd.writeFile(SD, LOG_FILE_NAME, "");
+  delay(2000);
 
   Serial.println("start program");
 
@@ -70,17 +120,24 @@ void setup() {
       Serial.println("MPU connection failed. Please restart 100kinsat.");
     }
   }
+  // GPSの値が正常に取れるまで待機
   start_time = millis();
   while(true) {
-    if (millis() - start_time > 5000) {
-      break;
+    if (millis() - start_time > 5 * 60 * 1000) {
+      Serial.println("Unable to read GPS value.");
+      mysd.appendLog("Unable to read GPS value.");
+      state = End;
+      return;
     }
-    if(mpu.update()) {
-      mpu.getYaw();
-    };
+    if (gps_serial.available() > 0) {
+      char c = gps_serial.read();
+      if(gps.getValues(c, &current_lng, &current_lat)) {
+        break;
+      }
+    }
   }
 
-  // set the calibration values.
+  // キャリブレーションで求めた補正値を設定する
 
   // == EXAMPLE (You need to calcurate these values on your device) ==
   // < calibration parameters >
@@ -92,12 +149,30 @@ void setup() {
   //-500.46, 370.35, 425.59
   //mag scale []: 
   //0.98, 1.04, 0.98
+  //   < calibration parameters >
+  // accel bias [g]: 
+  // -369.58, -15.69, -48.74
+  // gyro bias [deg/s]: 
+  // -0.06, 1.11, 0.25
+  // mag bias [mG]: 
+  // -496.91, 398.84, 403.28
+  // mag scale []: 
+  // 0.98, 1.01, 1.01
 
-  mpu.setAccBias(-309.97, 12.99, -20.75);
-  mpu.setGyroBias(-0.15, 1.17, 0.39);
-  mpu.setMagBias(-500.46, 370.35, 425.59);
+  mpu.setAccBias(-369.97, -15.69, -48.74);
+  mpu.setGyroBias(-0.06, 1.11, 0.25);
+  mpu.setMagBias(-496.46, 398.84, 403.28);
   mpu.setMagScale(1,1,1);
   mpu.selectFilter(QuatFilterSel::MADGWICK);
+
+  // MPUのフィルターが上手く機能するまで待機
+  start_time = millis();
+  while(true) {
+    if (millis() - start_time > 2000) {
+      break;
+    }
+    mpu.update();
+  }
 
   // 方位角の計算のため、目的地を設定
   azimuth.set_goal(goal_lng, goal_lat);
@@ -114,131 +189,137 @@ void setup() {
 
   // 開始時刻を記録
   start_time = millis();
-
-  digitalWrite(motorA[0], LOW);
-  digitalWrite(motorA[1], HIGH);
-  ledcWrite(CHANNEL_A, 80);
-  digitalWrite(motorB[0], HIGH);
-  digitalWrite(motorB[1], LOW);
-  ledcWrite(CHANNEL_B, 0);
+  // 停止状態から開始
+  moveMoter(0, 0);
 }
 
 void loop() {
   switch(state) {
     case Start:
       Serial.println("Start moving");
-      state = CalcYawOffset;
+      state = GetGPS;
+      mysd.appendLog("transition,CalcYawOffset");
       break;
+
     case CalcYawOffset:
       if (mpu.update()) {
-        yawOffset.update(mpu.getMagY(), mpu.getYaw());
+        float magY = mpu.getMagY();
+        float yaw = mpu.getYaw();
+        yawOffset.update(magY, yaw);
+        mpuAppendLog(mpu.getAccX(), mpu.getAccY(), mpu.getAccZ(), mpu.getGyroX(), mpu.getGyroY(), mpu.getGyroZ(), mpu.getMagX(), magY, mpu.getMagZ(), yaw);
       }
       if (millis() - start_time > 30 * 1000) {
         state = YawOffsetSet;
+        mysd.appendLog("transition,YawOffsetSet");
       }
       break;
+
     case YawOffsetSet:
-      // 典型的には -5 とかの値が出る
       yaw_offset = yawOffset.getOffset();
       char buf[50];
-      (String("yaw offset = ") + yaw_offset + "\n").toCharArray(buf, 50);
-      mysd.appendFile(SD, LOG_FILE_NAME, buf);
-      digitalWrite(motorA[0], LOW);
-      digitalWrite(motorA[1], LOW);
-      ledcWrite(CHANNEL_A, 0);
-      digitalWrite(motorB[0], LOW);
-      digitalWrite(motorB[1], LOW);
-      ledcWrite(CHANNEL_B, 0);
+      (String("yawOffset,") + yaw_offset).toCharArray(buf, 50);
+      Serial.println(buf);
+      mysd.appendLog(buf);
+      moveMoter(0, 0);
       state = GetGPS;
+      mysd.appendLog("transition,GetGPS");
       break;
 
     case GetGPS:
-      if (mpu.update()) {
-        current_yaw = mpu.getYaw() + 180;
-      }
       if (gps_serial.available() > 0) {
         char c = gps_serial.read();
         if(gps.getValues(c, &current_lng, &current_lat)) {
-          azimuth.azimuth_to_goal(current_lng, current_lat, &direction);
-          String msg = String("current position:,") + String(current_lat, 14) + "," + String(current_lng, 14);
-          msg.toCharArray(log_buf, 300);
-          Serial.println(msg);
-          mysd.appendFile(SD, LOG_FILE_NAME, log_buf);
-          Serial.println(String("direction: ") + direction);
-
-          digitalWrite(motorA[0], LOW);
-          digitalWrite(motorA[1], HIGH);
-          ledcWrite(CHANNEL_A, 80);
-          digitalWrite(motorB[0], HIGH);
-          digitalWrite(motorB[1], LOW);
-          ledcWrite(CHANNEL_B, 0);
-          state = ChangeDirection;
+          double distance = -1;
+          azimuth.distance_to_goal(current_lng, current_lat, &distance);
+          if (0 <= distance && distance < 0.005) {
+            String msg = String("azimuth,distance,") + String(distance, 5);
+            msg += String("transition,End\n");
+            msg.toCharArray(log_buf, 300);
+            Serial.println(msg);
+            mysd.appendLog(log_buf);
+            state = End;
+          } else {
+            azimuth.azimuth_to_goal(current_lng, current_lat, &direction);
+            String msg = String("sensor,gps,") + String(current_lat, 14) + "," + String(current_lng, 14) + String("\n");
+            msg += String("azimuth,direction,") + String(direction, 5) + String("\n");
+            msg += String("azimuth,distance,") + String(distance, 5) + String("\n");
+            msg += "transition,ChangeDirection";
+            msg.toCharArray(log_buf, 300);
+            Serial.println(msg);
+            mysd.appendLog(log_buf);
+            delay(500);
+            state = ChangeDirection;
+          }
         }
       }
       break;
 
     case ChangeDirection:
       if (mpu.update()) {
-        current_yaw = mpu.getYaw() + 180;
-        double diff = current_yaw - direction;
-        if (diff > 180) {
-          diff = diff - 360;
-        } else if (diff < -180) {
-          diff = diff + 360;
-        }
-        Serial.println(String(current_yaw, 5) + "," + String(direction, 5) + "," + String(diff, 5));
-        if (abs(diff) < 3) {
-          Serial.println("Finish changing direction");
-          start_time = millis();
-          digitalWrite(motorA[0], LOW);
-          digitalWrite(motorA[1], HIGH);
-          ledcWrite(CHANNEL_A, 180);
-          digitalWrite(motorB[0], HIGH);
-          digitalWrite(motorB[1], LOW);
-          ledcWrite(CHANNEL_B, 180);
-          state = MoveTo;
-        } else if (diff < 0) {
-          digitalWrite(motorA[0], LOW);
-          digitalWrite(motorA[1], HIGH);
-          ledcWrite(CHANNEL_A, 80);
-          digitalWrite(motorB[0], HIGH);
-          digitalWrite(motorB[1], LOW);
-          ledcWrite(CHANNEL_B, 0);
-        } else {
-          digitalWrite(motorA[0], LOW);
-          digitalWrite(motorA[1], HIGH);
-          ledcWrite(CHANNEL_A, 0);
-          digitalWrite(motorB[0], HIGH);
-          digitalWrite(motorB[1], LOW);
-          ledcWrite(CHANNEL_B, 80);
+        double yaw = mpu.getYaw();
+        if (yaw < -90) { yaw = yaw + 360; }
+        yaw_sum += yaw;
+        yaw_count++;
+        if (yaw_count >= 20) {
+          current_yaw = (yaw_sum / yaw_count) + 180.0;
+          if (current_yaw > 360) { current_yaw = current_yaw - 360; }
+          if (current_yaw < 0) { current_yaw = current_yaw + 360; }
+          double diff = current_yaw - direction;
+          if (diff > 180) {
+            diff = diff - 360;
+          } else if (diff < -180) {
+            diff = diff + 360;
+          }
+          yaw_sum = 0;
+          yaw_count = 0;
+          Serial.println(String("ChangeDirection,") + String(current_yaw, 5) + "," + String(direction, 5) + "," + String(diff, 5));
+          if (abs(diff) < 3) {
+            Serial.println("Finish changing direction");
+            cd_state == CD_Start;
+            start_time = millis();
+            moveMoter(180, 180);
+            state = MoveTo;
+            mysd.appendLog("transition,MoveTo");
+          } else if (diff < 0) {
+            if (cd_state == CD_Start || cd_state == CD_Left) {
+              cd_state == CD_Right;
+              moveMoter(80, 0);
+            }
+          } else {
+            if (cd_state == CD_Start || cd_state == CD_Right) {
+              cd_state == CD_Left;
+              moveMoter(0, 80);
+            }
+          }
+          String msg = String("sensor,mpu,") + current_yaw;
+          msg.toCharArray(log_buf, 300);
+          mysd.appendLog(log_buf);
         }
       }
       break;
     case MoveTo:
       if (millis() - start_time > 10 * 1000) {
-        digitalWrite(motorA[0], LOW);
-        digitalWrite(motorA[1], HIGH);
-        ledcWrite(CHANNEL_A, 0);
-        digitalWrite(motorB[0], HIGH);
-        digitalWrite(motorB[1], LOW);
-        ledcWrite(CHANNEL_B, 80);
+        moveMoter(0, 0);
         state = GetGPS;
+        mysd.appendLog("transition,GetGPS");
       }
       break;
     case End:
-      if (mpu.update()) {
-        current_yaw = mpu.getYaw() + 180;
-        Serial.println(current_yaw);
+      // if (mpu.update()) {
+      //   float yaw = mpu.getYaw();
+      //   mpuAppendLog(mpu.getAccX(), mpu.getAccY(), mpu.getAccZ(), mpu.getGyroX(), mpu.getGyroY(), mpu.getGyroZ(), mpu.getMagX(), mpu.getMagY(), mpu.getMagZ(), yaw);
+      //   current_yaw = yaw + 180;
+      //   Serial.println(current_yaw);
+      // }
+      if (gps_serial.available() > 0) {
+        char c = gps_serial.read();
+        if(gps.getValues(c, &current_lng, &current_lat)) {
+          String msg = String("sensor,gps,") + String(current_lat, 14) + "," + String(current_lng, 14);
+          msg.toCharArray(log_buf, 300);
+          mysd.appendLog(log_buf);
+        }
       }
-      digitalWrite(motorA[0], LOW);
-      digitalWrite(motorA[1], LOW);
-      ledcWrite(CHANNEL_A, 0);
-      digitalWrite(motorB[0], LOW);
-      digitalWrite(motorB[1], LOW);
-      ledcWrite(CHANNEL_B, 0);
-      // do nothing
+      moveMoter(0, 0);
       break;
   }
-
-
 }

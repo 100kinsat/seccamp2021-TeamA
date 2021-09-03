@@ -24,11 +24,11 @@ void YawOffset::update(double target_val, double yaw) {
       target_min = target_mean;
       yaw_offset = yaw_sum / data_count;
     }
-    String msg = "";
-    msg += target_mean;
-    msg += ",";
-    msg += yaw_sum / data_count;
-    Serial.println(msg);
+    // String msg = "";
+    // msg += target_mean;
+    // msg += ",";
+    // msg += yaw_sum / data_count;
+    // Serial.println(msg);
 
     target_sum = 0; yaw_sum = 0;
     data_count = 0;
