@@ -17,9 +17,8 @@ YawOffset yawOffset = YawOffset(); // yawの補正値を計算する
 HardwareSerial gps_serial(2); // GPSの通信
 
 // 目的地の座標
-// 公園の角 43.018823502674586, 141.4370544820975
-double goal_lat = 43.018823502674586;
-double goal_lng = 141.4370544820975;
+double goal_lat = 0;
+double goal_lng = 0;
 
 const int motorA[3] = {4, 13, 25};  // AIN1, AIN2, PWMA
 const int motorB[3] = {14, 27, 26}; // BIN1, BIN2, PWMB
@@ -81,17 +80,17 @@ void moveMoter(int left_moter, int right_moter) {
     digitalWrite(motorB[0], LOW);
     digitalWrite(motorB[1], LOW);
     ledcWrite(CHANNEL_B, 0);
-    msg += String("B,LOW,LOW,0,");
-  } if (right_moter > 0) {
+    msg += String(",B,LOW,LOW,0,");
+  } else if (right_moter > 0) {
     digitalWrite(motorB[0], HIGH);
     digitalWrite(motorB[1], LOW);
     ledcWrite(CHANNEL_B, right_moter);
-    msg += String("B,HIGH,LOW,") + String(right_moter);
+    msg += String(",B,HIGH,LOW,") + String(right_moter);
   } else {
     digitalWrite(motorB[0], LOW);
     digitalWrite(motorB[1], HIGH);
     ledcWrite(CHANNEL_B, -1 * right_moter);
-    msg += String("B,LOW,HIGH,") + String(-1 * right_moter);
+    msg += String(",B,LOW,HIGH,") + String(-1 * right_moter);
   }
   msg.toCharArray(log_buf, 300);
   mysd.appendLog(log_buf);
@@ -139,29 +138,9 @@ void setup() {
 
   // キャリブレーションで求めた補正値を設定する
 
-  // == EXAMPLE (You need to calcurate these values on your device) ==
-  // < calibration parameters >
-  // accel bias [g]: 
-  //-309.97, 12.99, -20.75
-  //gyro bias [deg/s]: 
-  //-0.15, 1.17, 0.39
-  //mag bias [mG]: 
-  //-500.46, 370.35, 425.59
-  //mag scale []: 
-  //0.98, 1.04, 0.98
-  //   < calibration parameters >
-  // accel bias [g]: 
-  // -369.58, -15.69, -48.74
-  // gyro bias [deg/s]: 
-  // -0.06, 1.11, 0.25
-  // mag bias [mG]: 
-  // -496.91, 398.84, 403.28
-  // mag scale []: 
-  // 0.98, 1.01, 1.01
-
-  mpu.setAccBias(-369.97, -15.69, -48.74);
-  mpu.setGyroBias(-0.06, 1.11, 0.25);
-  mpu.setMagBias(-496.46, 398.84, 403.28);
+  mpu.setAccBias(0, 0, 0);
+  mpu.setGyroBias(0, 0, 0);
+  mpu.setMagBias(0, 0, 0);
   mpu.setMagScale(1,1,1);
   mpu.selectFilter(QuatFilterSel::MADGWICK);
 
@@ -226,6 +205,9 @@ void loop() {
       break;
 
     case GetGPS:
+      if (mpu.update()) {
+        mpu.getYaw();
+      }
       if (gps_serial.available() > 0) {
         char c = gps_serial.read();
         if(gps.getValues(c, &current_lng, &current_lat)) {
@@ -247,7 +229,6 @@ void loop() {
             msg.toCharArray(log_buf, 300);
             Serial.println(msg);
             mysd.appendLog(log_buf);
-            delay(500);
             state = ChangeDirection;
           }
         }
@@ -257,7 +238,9 @@ void loop() {
     case ChangeDirection:
       if (mpu.update()) {
         double yaw = mpu.getYaw();
-        if (yaw < -90) { yaw = yaw + 360; }
+        if (90 < direction && direction < 270) {
+          if (yaw < 0) { yaw = yaw + 360; }
+        }
         yaw_sum += yaw;
         yaw_count++;
         if (yaw_count >= 20) {
@@ -275,29 +258,33 @@ void loop() {
           Serial.println(String("ChangeDirection,") + String(current_yaw, 5) + "," + String(direction, 5) + "," + String(diff, 5));
           if (abs(diff) < 3) {
             Serial.println("Finish changing direction");
-            cd_state == CD_Start;
+            cd_state = CD_Start;
             start_time = millis();
-            moveMoter(180, 180);
+            moveMoter(220, 220);
             state = MoveTo;
             mysd.appendLog("transition,MoveTo");
           } else if (diff < 0) {
             if (cd_state == CD_Start || cd_state == CD_Left) {
-              cd_state == CD_Right;
+              cd_state = CD_Right;
               moveMoter(80, 0);
             }
           } else {
             if (cd_state == CD_Start || cd_state == CD_Right) {
-              cd_state == CD_Left;
-              moveMoter(0, 80);
+              cd_state = CD_Left;
+              moveMoter(0,80);
             }
           }
-          String msg = String("sensor,mpu,") + current_yaw;
+          double original_yaw = (yaw_sum / yaw_count) > 180 ? (yaw_sum / yaw_count) - 360 : (yaw_sum / yaw_count);
+          String msg = String("sensor,mpu,") + original_yaw;
           msg.toCharArray(log_buf, 300);
           mysd.appendLog(log_buf);
         }
       }
       break;
     case MoveTo:
+      if(mpu.update()) {
+        mpu.getYaw();
+      }
       if (millis() - start_time > 10 * 1000) {
         moveMoter(0, 0);
         state = GetGPS;
