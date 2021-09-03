@@ -1,5 +1,7 @@
 #include "sd_lib.hpp"
 
+static char * path_log;
+
 MySD::MySD(){
     if(!SD.begin()){
         Serial.println("Card Mount Failed");
@@ -25,6 +27,29 @@ MySD::MySD(){
 
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
     Serial.printf("SD Card Size: %lluMB\n", cardSize);
+
+    //既存logファイルの確認
+    fs::FS &fs = SD;
+    int num = 1;
+    String path_tmp = "/log";
+    path_tmp.concat("0.txt");
+    //メモリ確保
+    char* cstr = new char[path_tmp.length() + 1];
+    strcpy(cstr, path_tmp.c_str());
+    while(true){
+      File file = fs.open(cstr);
+      if(file){
+        file.close();
+        num += 1;
+        path_tmp.setCharAt(4, '0'+num);
+        strcpy(cstr, path_tmp.c_str());
+      }
+      else{
+        path_log = new char[path_tmp.length() + 1];
+        strcpy(path_log, cstr);
+        break;
+      }
+    }
 }
 
 void MySD::listDir(fs::FS &fs, const char * dirname, uint8_t levels){
@@ -187,20 +212,22 @@ void MySD::testFileIO(fs::FS &fs, const char * path){
 void MySD::displaySpaceInfo(){
     Serial.printf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
     Serial.printf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+    Serial.printf("path_log: %s\n", path_log);
 }
 
 void MySD::appendLog(const char * message){
-    Serial.printf("Take a log: %s\n", message);
+    //Serial.printf("Take a log: %s\n", message);
 
     fs::FS &fs = SD;
-    File file = fs.open("/log.txt", FILE_APPEND);
+    //File file = fs.open("/log.txt", FILE_APPEND);
+    File file = fs.open(path_log, FILE_APPEND);
     if(!file){
         Serial.println("Failed to open file for appending");
         return;
     }
     
     if(printWithTime(file, message)){
-        Serial.println("log appended");
+        //Serial.println("log appended");
     } else {
         Serial.println("Append failed");
     }

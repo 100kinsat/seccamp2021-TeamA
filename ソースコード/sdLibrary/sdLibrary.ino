@@ -32,7 +32,6 @@ void setup(){
     mysd.testFileIO(SD, "/test.txt");
     mysd.displaySpaceInfo();
     mysd.appendLog("logInfo");
-    mysd.readFile(SD, "/log.txt");
 }
 
 void loop(){
